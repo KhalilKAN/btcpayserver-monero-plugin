@@ -59,6 +59,29 @@ namespace BTCPayServer.Plugins.Monero.Services
             _paymentService = paymentService;
         }
 
+        protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+        {
+            _ = Task.Run(async () =>
+            {
+                while (!stoppingToken.IsCancellationRequested)
+                {
+                    try
+                    {
+                        var cryptoCode = "XMR"; // Hardcoded for now; improve later if needed
+                        await UpdateAnyPendingMoneroLikePayment(cryptoCode);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "Error in periodic Monero invoice check");
+                    }
+
+                    await Task.Delay(TimeSpan.FromSeconds(15), stoppingToken);
+                }
+            });
+
+            await base.ExecuteAsync(stoppingToken);
+        }
+
         protected override void SubscribeToEvents()
         {
             base.SubscribeToEvents();
@@ -232,7 +255,7 @@ namespace BTCPayServer.Plugins.Monero.Services
         {
             await UpdateAnyPendingMoneroLikePayment(cryptoCode);
             _eventAggregator.Publish(new NewBlockEvent()
-                { PaymentMethodId = PaymentTypes.CHAIN.GetPaymentMethodId(cryptoCode) });
+            { PaymentMethodId = PaymentTypes.CHAIN.GetPaymentMethodId(cryptoCode) });
         }
 
         private async Task OnTransactionUpdated(string cryptoCode, string transactionHash)
@@ -320,118 +343,56 @@ namespace BTCPayServer.Plugins.Monero.Services
             }
         }
 
-        // private async Task HandlePaymentData(string cryptoCode, string address, long totalAmount, long subaccountIndex,
-        //     long subaddressIndex,
-        //     string txId, long confirmations, long blockHeight, long locktime, InvoiceEntity invoice,
-        //     List<(PaymentEntity Payment, InvoiceEntity invoice)> paymentsToUpdate)
-        // {
-        //     var network = _networkProvider.GetNetwork(cryptoCode);
-        //     var pmi = PaymentTypes.CHAIN.GetPaymentMethodId(network.CryptoCode);
-        //     var handler = (MoneroLikePaymentMethodHandler)_handlers[pmi];
-        //     var promptDetails = handler.ParsePaymentPromptDetails(invoice.GetPaymentPrompt(pmi).Details);
-        //     var details = new MoneroLikePaymentData()
-        //     {
-        //         SubaccountIndex = subaccountIndex,
-        //         SubaddressIndex = subaddressIndex,
-        //         TransactionId = txId,
-        //         ConfirmationCount = confirmations,
-        //         BlockHeight = blockHeight,
-        //         LockTime = locktime,
-        //         InvoiceSettledConfirmationThreshold = promptDetails.InvoiceSettledConfirmationThreshold
-        //     };
-        //     var status = GetStatus(details, invoice.SpeedPolicy) ? PaymentStatus.Settled : PaymentStatus.Processing;
-        //     var paymentData = new Data.PaymentData()
-        //     {
-        //         Status = status,
-        //         Amount = MoneroMoney.Convert(totalAmount),
-        //         Created = DateTimeOffset.UtcNow,
-        //         Id = $"{txId}#{subaccountIndex}#{subaddressIndex}",
-        //         Currency = network.CryptoCode,
-        //         InvoiceDataId = invoice.Id,
-        //     }.Set(invoice, handler, details);
-
-
-        //     //check if this tx exists as a payment to this invoice already
-        //     var alreadyExistingPaymentThatMatches = GetAllMoneroLikePayments(invoice, cryptoCode)
-        //         .SingleOrDefault(c => c.Id == paymentData.Id && c.PaymentMethodId == pmi);
-
-        //     //if it doesnt, add it and assign a new monerolike address to the system if a balance is still due
-        //     if (alreadyExistingPaymentThatMatches == null)
-        //     {
-        //         var payment = await _paymentService.AddPayment(paymentData, [txId]);
-        //         if (payment != null)
-        //             await ReceivedPayment(invoice, payment);
-        //     }
-        //     else
-        //     {
-        //         //else update it with the new data
-        //         alreadyExistingPaymentThatMatches.Status = status;
-        //         alreadyExistingPaymentThatMatches.Details = JToken.FromObject(details, handler.Serializer);
-        //         paymentsToUpdate.Add((alreadyExistingPaymentThatMatches, invoice));
-        //     }
-        // }
-
         private async Task HandlePaymentData(string cryptoCode, string address, long totalAmount, long subaccountIndex,
-    long subaddressIndex,
-    string txId, long confirmations, long blockHeight, long locktime, InvoiceEntity invoice,
-    List<(PaymentEntity Payment, InvoiceEntity invoice)> paymentsToUpdate)
-{
-    var network = _networkProvider.GetNetwork(cryptoCode);
-    var pmi = PaymentTypes.CHAIN.GetPaymentMethodId(network.CryptoCode);
-    var handler = (MoneroLikePaymentMethodHandler)_handlers[pmi];
-    var promptDetails = handler.ParsePaymentPromptDetails(invoice.GetPaymentPrompt(pmi).Details);
-
-    var details = new MoneroLikePaymentData()
-    {
-        SubaccountIndex = subaccountIndex,
-        SubaddressIndex = subaddressIndex,
-        TransactionId = txId,
-        ConfirmationCount = confirmations,
-        BlockHeight = blockHeight,
-        LockTime = locktime,
-        InvoiceSettledConfirmationThreshold = promptDetails.InvoiceSettledConfirmationThreshold
-    };
-
-    var status = GetStatus(details, invoice.SpeedPolicy) ? PaymentStatus.Settled : PaymentStatus.Processing;
-
-    var paymentData = new Data.PaymentData()
-    {
-        Status = status,
-        Amount = MoneroMoney.Convert(totalAmount),
-        Created = DateTimeOffset.UtcNow,
-        Id = $"{txId}#{subaccountIndex}#{subaddressIndex}",
-        Currency = network.CryptoCode,
-        InvoiceDataId = invoice.Id,
-    }.Set(invoice, handler, details);
-
-    // check if the tx already exists for this invoice
-    var alreadyExistingPaymentThatMatches = GetAllMoneroLikePayments(invoice, cryptoCode)
-        .SingleOrDefault(c => c.Id == paymentData.Id && c.PaymentMethodId == pmi);
-
-    if (alreadyExistingPaymentThatMatches == null)
-    {
-        // 🔒 Extra validation: ensure address is not already registered for another invoice
-        var invoiceFromAddress = await _invoiceRepository.GetInvoiceFromAddress(pmi, address);
-        if (invoiceFromAddress != null && invoiceFromAddress.Id != invoice.Id)
+            long subaddressIndex,
+            string txId, long confirmations, long blockHeight, long locktime, InvoiceEntity invoice,
+            List<(PaymentEntity Payment, InvoiceEntity invoice)> paymentsToUpdate)
         {
-            _logger.LogWarning($"Skipping payment registration: address '{address}' already tied to invoice '{invoiceFromAddress.Id}', not '{invoice.Id}'");
-            return;
-        }
+            var network = _networkProvider.GetNetwork(cryptoCode);
+            var pmi = PaymentTypes.CHAIN.GetPaymentMethodId(network.CryptoCode);
+            var handler = (MoneroLikePaymentMethodHandler)_handlers[pmi];
+            var promptDetails = handler.ParsePaymentPromptDetails(invoice.GetPaymentPrompt(pmi).Details);
+            var details = new MoneroLikePaymentData()
+            {
+                SubaccountIndex = subaccountIndex,
+                SubaddressIndex = subaddressIndex,
+                TransactionId = txId,
+                ConfirmationCount = confirmations,
+                BlockHeight = blockHeight,
+                LockTime = locktime,
+                InvoiceSettledConfirmationThreshold = promptDetails.InvoiceSettledConfirmationThreshold
+            };
+            var status = GetStatus(details, invoice.SpeedPolicy) ? PaymentStatus.Settled : PaymentStatus.Processing;
+            var paymentData = new Data.PaymentData()
+            {
+                Status = status,
+                Amount = MoneroMoney.Convert(totalAmount),
+                Created = DateTimeOffset.UtcNow,
+                Id = $"{txId}#{subaccountIndex}#{subaddressIndex}",
+                Currency = network.CryptoCode,
+                InvoiceDataId = invoice.Id,
+            }.Set(invoice, handler, details);
 
-        var payment = await _paymentService.AddPayment(paymentData, [txId]);
-        if (payment != null)
-        {
-            await ReceivedPayment(invoice, payment);
-        }
-    }
-    else
-    {
-        alreadyExistingPaymentThatMatches.Status = status;
-        alreadyExistingPaymentThatMatches.Details = JToken.FromObject(details, handler.Serializer);
-        paymentsToUpdate.Add((alreadyExistingPaymentThatMatches, invoice));
-    }
-}
 
+            //check if this tx exists as a payment to this invoice already
+            var alreadyExistingPaymentThatMatches = GetAllMoneroLikePayments(invoice, cryptoCode)
+                .SingleOrDefault(c => c.Id == paymentData.Id && c.PaymentMethodId == pmi);
+
+            //if it doesnt, add it and assign a new monerolike address to the system if a balance is still due
+            if (alreadyExistingPaymentThatMatches == null)
+            {
+                var payment = await _paymentService.AddPayment(paymentData, [txId]);
+                if (payment != null)
+                    await ReceivedPayment(invoice, payment);
+            }
+            else
+            {
+                //else update it with the new data
+                alreadyExistingPaymentThatMatches.Status = status;
+                alreadyExistingPaymentThatMatches.Details = JToken.FromObject(details, handler.Serializer);
+                paymentsToUpdate.Add((alreadyExistingPaymentThatMatches, invoice));
+            }
+        }
 
         private bool GetStatus(MoneroLikePaymentData details, SpeedPolicy speedPolicy)
             => ConfirmationsRequired(details, speedPolicy) <= details.ConfirmationCount;
