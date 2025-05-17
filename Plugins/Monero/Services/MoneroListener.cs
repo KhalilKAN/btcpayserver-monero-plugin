@@ -23,6 +23,7 @@ using Microsoft.Extensions.Logging;
 using NBitcoin;
 using NBXplorer;
 using Newtonsoft.Json.Linq;
+using Microsoft.EntityFrameworkCore;
 
 namespace BTCPayServer.Plugins.Monero.Services
 {
