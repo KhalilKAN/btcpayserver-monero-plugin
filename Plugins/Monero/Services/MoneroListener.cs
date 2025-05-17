@@ -353,9 +353,9 @@ namespace BTCPayServer.Plugins.Monero.Services
         }
 
         private async Task HandlePaymentData(string cryptoCode, string address, long totalAmount, long subaccountIndex,
-            long subaddressIndex,
-            string txId, long confirmations, long blockHeight, long locktime, InvoiceEntity invoice,
-            List<(PaymentEntity Payment, InvoiceEntity invoice)> paymentsToUpdate)
+    long subaddressIndex,
+    string txId, long confirmations, long blockHeight, long locktime, InvoiceEntity invoice,
+    List<(PaymentEntity Payment, InvoiceEntity invoice)> paymentsToUpdate)
         {
             var network = _networkProvider.GetNetwork(cryptoCode);
             var pmi = PaymentTypes.CHAIN.GetPaymentMethodId(network.CryptoCode);
@@ -382,26 +382,30 @@ namespace BTCPayServer.Plugins.Monero.Services
                 InvoiceDataId = invoice.Id,
             }.Set(invoice, handler, details);
 
+            var existing = GetAllMoneroLikePayments(invoice, cryptoCode)
+                .FirstOrDefault(c => c.Id == paymentData.Id && c.PaymentMethodId == pmi);
 
-            //check if this tx exists as a payment to this invoice already
-            var alreadyExistingPaymentThatMatches = GetAllMoneroLikePayments(invoice, cryptoCode)
-                .SingleOrDefault(c => c.Id == paymentData.Id && c.PaymentMethodId == pmi);
-
-            //if it doesnt, add it and assign a new monerolike address to the system if a balance is still due
-            if (alreadyExistingPaymentThatMatches == null)
+            if (existing == null)
             {
-                var payment = await _paymentService.AddPayment(paymentData, [txId]);
-                if (payment != null)
-                    await ReceivedPayment(invoice, payment);
+                try
+                {
+                    var payment = await _paymentService.AddPayment(paymentData, [txId]);
+                    if (payment != null)
+                        await ReceivedPayment(invoice, payment);
+                }
+                catch (DbUpdateException ex) when (ex.InnerException?.Message.Contains("duplicate key") == true)
+                {
+                    _logger.LogWarning(ex, "Skipping duplicate payment {Id} for invoice {InvoiceId}", paymentData.Id, invoice.Id);
+                }
             }
             else
             {
-                //else update it with the new data
-                alreadyExistingPaymentThatMatches.Status = status;
-                alreadyExistingPaymentThatMatches.Details = JToken.FromObject(details, handler.Serializer);
-                paymentsToUpdate.Add((alreadyExistingPaymentThatMatches, invoice));
+                existing.Status = status;
+                existing.Details = JToken.FromObject(details, handler.Serializer);
+                paymentsToUpdate.Add((existing, invoice));
             }
         }
+
 
         private bool GetStatus(MoneroLikePaymentData details, SpeedPolicy speedPolicy)
             => ConfirmationsRequired(details, speedPolicy) <= details.ConfirmationCount;
