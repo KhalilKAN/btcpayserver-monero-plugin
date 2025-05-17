@@ -59,27 +59,36 @@ namespace BTCPayServer.Plugins.Monero.Services
             _paymentService = paymentService;
         }
 
-        protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+        private Task _pollingTask = Task.CompletedTask;
+
+        public override Task StartAsync(CancellationToken cancellationToken)
         {
-            _ = Task.Run(async () =>
+            SubscribeToEvents(); // sigue escuchando eventos
+
+            _pollingTask = Task.Run(async () =>
             {
-                while (!stoppingToken.IsCancellationRequested)
+                while (!cancellationToken.IsCancellationRequested)
                 {
                     try
                     {
-                        var cryptoCode = "XMR"; // Hardcoded for now; improve later if needed
-                        await UpdateAnyPendingMoneroLikePayment(cryptoCode);
+                        await UpdateAnyPendingMoneroLikePayment("XMR");
                     }
                     catch (Exception ex)
                     {
-                        _logger.LogWarning(ex, "Error in periodic Monero invoice check");
+                        _logger.LogError(ex, "Error while polling Monero invoices");
                     }
 
-                    await Task.Delay(TimeSpan.FromSeconds(15), stoppingToken);
+                    await Task.Delay(TimeSpan.FromSeconds(30), cancellationToken); // cada 30 segundos
                 }
-            });
+            }, cancellationToken);
 
-            await base.ExecuteAsync(stoppingToken);
+            return base.StartAsync(cancellationToken); // mantiene comportamiento base
+        }
+
+        public override async Task StopAsync(CancellationToken cancellationToken)
+        {
+            await base.StopAsync(cancellationToken);
+            await _pollingTask;
         }
 
         protected override void SubscribeToEvents()
